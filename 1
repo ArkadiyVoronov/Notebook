@@ -1,0 +1,429 @@
+// Файл "NoteBook.cpp"
+// Программа "Записная книжка"
+//
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+typedef struct {
+    char *name;  // Указатель на имя
+    char *phone; // Указатель на телефон
+} NameRecord;
+
+// Максимальный размер записной книжки
+const int MAXNAMES = 1000;
+
+// Массив записей
+static NameRecord records[MAXNAMES];
+
+// Текущее количество записей в книжке
+static int numRecords = 0;
+
+// Имя файла для сохранения содержимого книжки
+const char* const NoteBookFile = "NoteBook.dat";
+
+static bool modified;
+static char namePrefix[256]; // Начало имени,
+static int namePrefixLen;    //   его длина
+static char phone[256];      // Телефон,
+static int phoneLen;         //   его длина
+
+// Прототипы функций
+static bool loadNoteBook(); // Загрузить книжку из файла
+static bool saveNoteBook(); // Сохранить книжку в файле
+static bool readLine(       // Ввести строку с клавиатуры
+    char *line, int maxlen, int *len
+);
+static bool readName();     // Ввести имя с клавиатуры
+
+static int search(          // Поиск имени в массиве
+    const char *namePrefix, //   начало искомого имени
+    int startPosition       //   позиция начала поиска
+);
+
+static void releaseMemory(); // Освободить память
+
+// Прототипы функций, реализующих команды
+static void onAdd();
+static void onRemove();
+static void onFind();
+static void onModify();
+static void onShow();
+static void onHelp();
+
+int main() {
+    char line[256];      // Введенная строка
+    int lineLen;         // Длина строки
+    int comBeg,          // Индексы начала
+        comEnd;          //     и за-конца команды
+    int comLen;          // Длина команды
+    const char *command; // Указатель на начало команды
+    int nameBeg;         // Индекс начала имени
+    int i;               // Индекс в массиве line
+
+    printf("Программа \"Записная книжка\"\n");
+    onHelp();           // Напечатать подсказку
+
+    loadNoteBook(); // Загрузить содержимое книжки
+                    //           из файла
+    while (true) {
+        printf(">");    // Приглашение на ввод команды
+
+        // Ввести командную строку
+        if (!readLine(line, 256, &lineLen)) {
+            break;  // При ошибке завершить программу
+        }
+
+        // Разбор командной строки
+        // 1. Пропустить пробелы в начале строки
+        i = 0;
+        while (i < lineLen && isspace(line[i])) {
+            ++i;
+        }
+
+        // 2. Выделить команду
+        comBeg = i;
+        while (i < lineLen && isalpha(line[i])) {
+            ++i;
+        }
+        comEnd = i;
+
+        command = line + comBeg;  // Указ.начала команды
+        comLen = comEnd - comBeg; // ее длина
+        if (comLen <= 0)          // Команда пустая =>
+            continue;             //   ввести следующую
+
+        // 3. Выделить префикс имени
+        i = comEnd;
+        // Пропустить пробелы перед именем
+        while (i < lineLen && isspace(line[i])) {
+            ++i;
+        }
+        nameBeg = i;
+        if (nameBeg >= lineLen) {
+            // Имя не указано в команде
+            namePrefix[0] = 0; // Запомним, что имя
+            namePrefixLen = 0; //            пустое
+        } else {
+            // Имя задано в команде, запомним его.
+            // Указ. на начало имени равен line+nameBeg,
+            // длина имени равна lineLen-nameBeg.
+            strcpy(namePrefix, line + nameBeg);
+            namePrefixLen = lineLen - nameBeg;
+        }
+
+        // Разбор строки закончен.
+        // Вызовем функцию, реализующую команду
+        if (strncmp(command, "add", comLen) == 0) {
+            onAdd();
+        } else if (
+            strncmp(command, "remove", comLen) == 0
+        ) {
+            onRemove();
+        } else if (
+            strncmp(command, "find", comLen) == 0
+        ) {
+            onFind();
+        } else if (
+            strncmp(command, "modify", comLen) == 0
+        ) {
+            onModify();
+        } else if (
+            strncmp(command, "show", comLen) == 0
+        ) {
+            onShow();
+        } else if (
+            strncmp(command, "help", comLen) == 0
+        ) {
+            onHelp();
+        } else if (
+            strncmp(command, "quit", comLen) == 0
+        ) {
+            break;      // Завершить работу
+        } else {        // Неправильная команда =>
+            onHelp();   //    напечатать подсказку
+        }
+    } // конец цикла while
+
+    if (modified) {     // Если книжка модифицирована,
+        saveNoteBook(); // то сохранить ее содержимое
+    }
+
+    releaseMemory(); // Освободить память
+    return 0;   // Завершить программу с кодом успеха
+}
+
+static bool readLine( // Считать строку с клавиатуры
+    char *line, int maxlen, int *len
+) {
+    int size;
+
+    *line = 0; *len = 0; // Инициализация пустой строкой
+    if (fgets(line, maxlen, stdin) == 0)
+        return false;    // Ошибка ввода
+
+    size = strlen(line); // Длина введенной строки
+
+    // Удалить разделители строк из конца строки
+    if (size > 0 && line[size - 1] == '\n') {
+        line[size - 1] = 0; --size;
+    }
+    if (size > 0 && line[size - 1] == '\r') {
+        line[size - 1] = 0; --size;
+    }
+
+    *len = size;    // Выдать длину строки
+    return true;
+}
+
+static int search(          // Поиск имени в массиве
+    const char *namePrefix, //  искомый префикс имени
+    int startPosition       //  позиция начала поиска
+) {
+    int i = startPosition;
+    int len = strlen(namePrefix);
+
+    if (len == 0)
+        return startPosition;
+
+    while (i < numRecords) {
+        if (
+            strncmp( // Сравнить имя и префикс
+                records[i].name, namePrefix, len
+            ) == 0
+        ) {
+            return i;   // Нашли имя с данным префиксом
+        }
+        ++i;            // К следующей записи
+    }
+    return (-1);    // Имя не найдено
+}
+
+static bool readName() {    // Ввести имя с клавиатуры
+    int size;
+    printf("Введите имя:\n");
+    return readLine(namePrefix, 256, &namePrefixLen);
+}
+
+static void onAdd() { // Добавить или изменить запись
+    int i;
+
+    if (namePrefixLen == 0) { // Если имя не задано в
+        if (!readName()) {    // команде, то ввести его
+            return;           // Ошибка ввода
+        }
+    }
+
+    if (namePrefixLen == 0) {
+        return;
+    }
+
+    // Ищем имя в книжке
+    i = search(namePrefix, 0);
+    if (i < 0) {
+        // Имя не содержится в книжке, добавим его
+        if (numRecords >= MAXNAMES) {
+            printf("Переполнение книжки.\n");
+            return;
+        }
+        i = numRecords; ++numRecords;
+
+        // Захватим память под имя
+        records[i].name = (char *)
+            malloc(namePrefixLen + 1);
+        // Запишем имя в книжку
+        strcpy(records[i].name, namePrefix);
+    }
+
+    printf("Введите телефон:\n");
+    readLine(phone, 256, &phoneLen);
+
+    // Захватим память под телефон
+    records[i].phone = (char *) malloc(phoneLen + 1);
+    // Запишем телефон
+    strcpy(records[i].phone, phone);
+
+    modified = true; // Запомним, что содержимое менялось
+}
+
+static void onRemove() {    // Удалить запись
+    int i;
+
+    if (namePrefixLen == 0) { // Если имя не задано в
+        if (!readName()) {    // команде, то ввести его
+            return;           // Ошибка ввода
+        }
+    }
+
+    if (namePrefixLen == 0) {
+        return;
+    }
+
+    // Ищем имя в книжке
+    i = search(namePrefix, 0);
+    if (i < 0) { // Если имя не содержится в книжке,
+        return;  // то ничего не делать
+    }
+
+    // Освободим память
+    free(records[i].name);
+    free(records[i].phone);
+
+    // Перепишем последнюю запись на место удаляемой
+    if (i >= 2 && i != numRecords - 1) {
+        records[i] = records[numRecords - 1];
+    }
+    --numRecords;    // Уменьшим число записей
+
+    modified = true; // Запомним, что содержимое менялось
+}
+
+static void onFind() {      // Найти запись
+    int i;
+    if (namePrefixLen == 0) {
+        if (!readName()) {
+            return; // Ошибка ввода
+        }
+    }
+    i = search(namePrefix, 0);
+    if (i < 0) {
+        printf("Имя не найдено.\n");
+    } else {
+        printf("Имя: %s\n", records[i].name);
+        printf("Телефон: %s\n", records[i].phone);
+    }
+}
+
+static void onModify() { // Изменить номер телефона
+    int i;
+    if (namePrefixLen == 0) {
+        if (!readName()) {
+            return; // Ошибка ввода
+        }
+    }
+    if (namePrefixLen == 0) {
+        return;
+    }
+
+    // Ищем имя в книжке
+    i = search(namePrefix, 0);
+    if (i < 0) {
+        printf("Имя не найдено.\n");
+    } else {
+        onAdd(); // Добавление модифицирует телефон,
+    }            //     когда имя уже в книжке
+}
+
+// Показать все записи с данным префиксом
+static void onShow() {
+    int pos = 0;
+    while (pos < numRecords) {
+        if (namePrefixLen > 0) {
+            pos = search(namePrefix, pos);
+            if (pos < 0) {  // Имя не найдено =>
+                break;      // выйти из цикла
+            }
+        }
+        printf("Имя: %s\n", records[pos].name);
+        printf("Телефон: %s\n\n", records[pos].phone);
+        ++pos;
+    }
+}
+
+static void onHelp() {
+    printf(
+        "Список команд:\n"
+        "  add    добавить пару (имя, телефон)\n"
+        "  remove удалить имя\n"
+        "  find   найти имя и напечатать телефон\n"
+        "  modify изменить телефон\n"
+        "  show   напечатать записи с данным префиксом\n"
+        "         (если префикс пустой, то все записи)\n"
+        "  help   напечатать этот текст\n"
+        "  quit   закончить работу\n"
+    );
+    printf("Введите команду и (не обязательно) имя.\n");
+}
+
+static bool loadNoteBook() { // Загрузить книжку из файла
+    char line[256]; // Буфер для ввода строки
+    int i;
+    FILE *f = fopen(NoteBookFile, "rt");
+    if (f == 0) {
+        return false;
+    }
+    numRecords = 0;
+    while (fgets(line, 256, f) != 0) {
+        int len = strlen(line);
+        char *name;
+        char *phone = 0;
+
+        // Удалим разделители строк
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = 0; --len;
+        }
+        if (len > 0 && line[len - 1] == '\r') {
+            line[len - 1] = 0; --len;
+        }
+
+        if (len < 6 || strncmp(line, "name=", 5) != 0) {
+            continue;   // К следующей строке
+        }
+
+        // Запомним имя
+        name = (char *) malloc((len - 5) + 1);
+        strcpy(name, line + 5);
+
+        // Считаем строку с телефоном
+        if (fgets(line, 256, f) != 0) {
+            len = strlen(line);
+            // Удалим разделители строк
+            if (len > 0 && line[len - 1] == '\n') {
+                line[len - 1] = 0; --len;
+            }
+            if (len > 0 && line[len - 1] == '\r') {
+                line[len - 1] = 0; --len;
+            }
+            if (
+                len >= 7 &&
+                strncmp(line, "phone=", 6) == 0
+            ) {
+                // Запомним телефон
+                phone = (char *) malloc((len - 6) + 1);
+                strcpy(phone, line + 6);
+            }
+        }
+
+        // Заполним новую запись
+        records[numRecords].name = name;
+        if (phone == 0) {
+            phone = (char *) malloc(1);
+            phone[0] = 0;   // Пустая строка
+        }
+        records[numRecords].phone = phone;
+        ++numRecords;   // Увеличим число записей
+    }
+    return true;
+}
+
+static bool saveNoteBook() { // Сохранить книжку в файле
+    int i;
+    FILE *f = fopen(NoteBookFile, "wt");
+    if (f == 0) {
+        return false;
+    }
+    for (i = 0; i < numRecords; ++i) {
+        fprintf(f, "name=%s\n", records[i].name);
+        fprintf(f, "phone=%s\n\n", records[i].phone);
+    }
+    return true;
+}
+
+static void releaseMemory() {
+    int i;
+    for (i = 0; i < numRecords; ++i) {
+        free(records[i].name);
+        free(records[i].phone);
+    }
+}
